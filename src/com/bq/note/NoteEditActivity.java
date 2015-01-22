@@ -10,8 +10,10 @@ import org.bq.tool.ResourceParser;
 import org.bq.tool.ResourceParser.NoteBgResources;
 import org.bq.tool.ResourceParser.NoteItemBgResources;
 
+import com.bq.widget.NoteWidgetProvider_4x;
+
 import android.app.Activity;
-import android.content.Context;
+import android.appwidget.AppWidgetManager;
 import android.content.Intent;
 import android.os.Bundle;
 import android.text.TextUtils;
@@ -24,7 +26,6 @@ import android.view.View.OnClickListener;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.TextView;
-import android.widget.Toast;
 
 public class NoteEditActivity extends Activity implements OnClickListener {
 	private class HeadViewHolder {
@@ -70,20 +71,23 @@ public class NoteEditActivity extends Activity implements OnClickListener {
 
 	private Note workingNote;
 
-	private static final int SHORTCUT_ICON_TITLE_MAX_LEN = 10;
+	private int bgId = 0;
 
-	public static final String TAG_CHECKED = String.valueOf('\u221A');
-	public static final String TAG_UNCHECKED = String.valueOf('\u25A1');
+	private int mAppWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID;
 
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
 		this.setContentView(R.layout.note_edit);
 		noteDao = NoteApplication.daoSession.getNoteDao();
+		mAppWidgetId = getIntent().getIntExtra("org.bq.note.widget_id",
+				AppWidgetManager.INVALID_APPWIDGET_ID);
+		bgId = getIntent().getIntExtra("org.bq.note.bg_id", 0);
 		if (savedInstanceState == null && !initActivityState(getIntent())) {
 			finish();
 			return;
 		}
+		Log.i("AppWidgetId&bgId", mAppWidgetId + "%%%%" + bgId);
 		initResources();
 	}
 
@@ -109,15 +113,20 @@ public class NoteEditActivity extends Activity implements OnClickListener {
 	}
 
 	private boolean initActivityState(Intent intent) {
-		long noteId = intent.getLongExtra(Intent.EXTRA_UID, 0L);
-		Log.i(TAG, String.valueOf(noteId));
+		long noteId = intent.getLongExtra(Intent.EXTRA_UID, 0);
+		Log.i("NoteId", String.valueOf(noteId));
 
 		if (noteId == 0L) {
 			workingNote = new Note();
-			workingNote.setType(ResourceParser.getDefaultBgId(this));
+			if (mAppWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+				workingNote.setType(bgId);
+			} else {
+				workingNote.setType(ResourceParser.getDefaultBgId(this));
+			}
 			return true;
 		} else {
 			workingNote = noteDao.load(noteId);
+			mAppWidgetId = workingNote.getWidget();
 			if (workingNote == null) {
 				Log.e(TAG, "load note failed with note id:" + noteId);
 				finish();
@@ -239,20 +248,14 @@ public class NoteEditActivity extends Activity implements OnClickListener {
 		super.onPause();
 	}
 
-	/*
-	 * private void updateWidget() { Intent intent = new
-	 * Intent(AppWidgetManager.ACTION_APPWIDGET_UPDATE); if
-	 * (workingNote.getWidgetType() == Notes.TYPE_WIDGET_2X) {
-	 * intent.setClass(this, NoteWidgetProvider_2x.class); } else if
-	 * (workingNote.getWidgetType() == Notes.TYPE_WIDGET_4X) {
-	 * intent.setClass(this, NoteWidgetProvider_4x.class); } else { Log.e(TAG,
-	 * "Unspported widget type"); return; }
-	 * 
-	 * intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, new int[] {
-	 * workingNote.getWidgetId() });
-	 * 
-	 * sendBroadcast(intent); setResult(RESULT_OK, intent); }
-	 */
+	private void updateWidget() {
+
+		Intent intent = new Intent(AppWidgetManager.ACTION_APPWIDGET_UPDATE);
+		intent.setClass(this, NoteWidgetProvider_4x.class);
+		intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS,
+				new int[] { mAppWidgetId });
+		sendBroadcast(intent);
+	}
 
 	public void onClick(View v) {
 		int id = v.getId();
@@ -273,32 +276,13 @@ public class NoteEditActivity extends Activity implements OnClickListener {
 	@Override
 	public void onBackPressed() {
 		saveNote();
+		updateWidget();
 		super.onBackPressed();
 	}
 
 	@Override
 	public boolean onOptionsItemSelected(MenuItem item) {
-		/*
-		 * switch (item.getItemId()) { case R.id.menu_share: getWorkingText();
-		 * sendTo(this, workingNote.getContent()); break; case
-		 * R.id.menu_send_to_desktop: sendToDesktop(); break; default: break; }
-		 */
 		return true;
-	}
-
-	/**
-	 * Share note to apps that support {@link Intent#ACTION_SEND} action and
-	 * {@text/plain} type
-	 */
-	private void sendTo(Context context, String info) {
-		Intent intent = new Intent(Intent.ACTION_SEND);
-		intent.putExtra(Intent.EXTRA_TEXT, info);
-		intent.setType("text/plain");
-		context.startActivity(intent);
-	}
-
-	public void onWidgetChanged() {
-		// updateWidget();
 	}
 
 	private void getWorkingText() {
@@ -307,69 +291,21 @@ public class NoteEditActivity extends Activity implements OnClickListener {
 
 	private boolean saveNote() {
 		getWorkingText();
+		workingNote.setWidget(mAppWidgetId);
 		if (workingNote.getId() != null) {
 			noteDao.update(workingNote);
-			return true;
 		} else {
 			if (TextUtils.isEmpty(workingNote.getText())) {
 				return false;
 			}
 			long saved = noteDao.insert(workingNote);
-			Log.d("SaveNewNote",
+			Log.i("SaveNewNote",
 					"Inserted new note, ID: " + workingNote.getId());
 			if (saved != 0) {
 				setResult(RESULT_OK);
 				return true;
 			}
 		}
-
 		return false;
-	}
-
-	private void sendToDesktop() {
-
-		if (noteDao.load(workingNote.getId()) != null) {
-			saveNote();
-		}
-
-		if (workingNote.getId() > 0) {
-			Intent sender = new Intent();
-			Intent shortcutIntent = new Intent(this, NoteEditActivity.class);
-			shortcutIntent.setAction(Intent.ACTION_VIEW);
-			shortcutIntent.putExtra(Intent.EXTRA_UID, workingNote.getId());
-			sender.putExtra(Intent.EXTRA_SHORTCUT_INTENT, shortcutIntent);
-			sender.putExtra(Intent.EXTRA_SHORTCUT_NAME,
-					makeShortcutIconTitle(workingNote.getText()));
-			sender.putExtra(Intent.EXTRA_SHORTCUT_ICON_RESOURCE,
-					Intent.ShortcutIconResource.fromContext(this,
-							R.drawable.icon_app));
-			sender.putExtra("duplicate", true);
-			sender.setAction("com.android.launcher.action.INSTALL_SHORTCUT");
-			showToast(R.string.info_note_enter_desktop);
-			sendBroadcast(sender);
-		} else {
-			/**
-			 * There is the condition that user has input nothing (the note is
-			 * not worthy saving), we have no note id, remind the user that he
-			 * should input something
-			 */
-			Log.e(TAG, "Send to desktop error");
-			showToast(R.string.error_note_empty_for_send_to_desktop);
-		}
-	}
-
-	private String makeShortcutIconTitle(String content) {
-		content = content.replace(TAG_CHECKED, "");
-		content = content.replace(TAG_UNCHECKED, "");
-		return content.length() > SHORTCUT_ICON_TITLE_MAX_LEN ? content
-				.substring(0, SHORTCUT_ICON_TITLE_MAX_LEN) : content;
-	}
-
-	private void showToast(int resId) {
-		showToast(resId, Toast.LENGTH_SHORT);
-	}
-
-	private void showToast(int resId, int duration) {
-		Toast.makeText(this, resId, duration).show();
 	}
 }
